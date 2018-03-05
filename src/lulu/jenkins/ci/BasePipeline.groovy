@@ -7,6 +7,7 @@ abstract class BasePipeline implements Serializable {
 
     def script
     def logger
+    def orgName
     def projectName
     def branchName
     def firstUnstableStage
@@ -63,6 +64,7 @@ abstract class BasePipeline implements Serializable {
                 }
                 script.stage ("Notify"){
                   logger.info "### Notify"
+                  setBuildStatusInGit()
                   if (ifNotify) {
                     def notify = new Notify(script)
                     notify.slackNotify("#jenkins_ci", "slack_jenkins_ci", branchName, versionName)
@@ -114,8 +116,8 @@ abstract class BasePipeline implements Serializable {
                                     recursiveSubmodules: true,
                                     reference: '',
                                     trackingSubmodules: false]],
-                browser          : [$class: 'GithubWeb', repoUrl: Constants.GITHUB_BROWSE_URL + projectName ],
-                userRemoteConfigs: [[url: Constants.GITHUB_URL + projectName + '.git' ]]
+                browser          : [$class: 'GithubWeb', repoUrl: Constants.GITHUB_BROWSE_URL + orgName + "/" + projectName ],
+                userRemoteConfigs: [[url: Constants.GITHUB_URL + orgName + "/" + projectName + '.git' ]]
 
         ]
 
@@ -184,11 +186,22 @@ abstract class BasePipeline implements Serializable {
     }
 
     void createVersionFile(){
-      def shortProjectName = script.sh (returnStdout: true, script: "basename '${projectName}'").trim()
-      def shortProjectNameUpper = shortProjectName.toUpperCase()
-      def version_map = [ (shortProjectNameUpper + "_VERSION"): "${versionName}",
-                          (shortProjectNameUpper + "_GIT_COMMIT"): "${getCommitSha()}"]
-      script.writeYaml file: shortProjectName + "_version", data: version_map
+      def projectNameUpper = projectName.toUpperCase()
+      def version_map = [ (projectNameUpper + "_VERSION"): "${versionName}",
+                          (projectNameUpper + "_GIT_COMMIT"): "${getCommitSha()}"]
+      script.writeYaml file: projectName + "_version", data: version_map
+    }
+
+    void setBuildStatusInGit() {
+      // Workaround - there is no UNSTABLE status that can be sent to GitHub, change it to ERROR
+      def buildSts = script.currentBuild.currentResult
+      if (buildSts == "UNSTABLE"){
+        buildSts = "ERROR"
+      }
+      // need to have jenkins_github_login_user_token defined in your credetials (create the token for user on GitHub in advance)
+      logger.info("repo: ${projectName}, account: \"myorg\", context: 'build_sts', credentialsId: \"jenkins_github_login_user_token\", sha: \"${getCommitSha()}\", description: 'Build Status', status: ${buildSts}")
+      script.githubNotify account: 'myorg', context: 'build_sts', credentialsId: 'jenkins_github_login_user_token', description: 'Build Status', repo: projectName, sha: getCommitSha(), status: buildSts
+
     }
 
     void setGitBranch( String inputGitBranch = ""){
@@ -211,11 +224,6 @@ abstract class BasePipeline implements Serializable {
     void build() {
 
     }
-
-    void createGitInfoFile() {
-        // Implement in CIs where info file is not created during compile (i.e. non maven builds
-    }
-
 
     void unitTests(String unitTestArgs) {
         // Implement in CIs where UTs are not being run during compile (i.e. non maven builds)
