@@ -24,14 +24,13 @@ Additional features:
 - notify to Slack
 - upload files to Google drive
 - set build description
--
+- build status on Github when build is finished
 
 Note:
-- Job parameters are not defined in code because I wanted them to be different for branch/master/release jobs - can be implemented in code, but make it much more complicated and unstable...
+- Job parameters are not defined in code because I wanted them to be different for branch/master/release jobs - can be implemented in code, but makes it much more complicated and unstable...
 
 
 TODO:
-- update build status on Github when job is finished
 - add the same support for Bitbucket
 - add support for showing submodules changes
 - add mail notifications
