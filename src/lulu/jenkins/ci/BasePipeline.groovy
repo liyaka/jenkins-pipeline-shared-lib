@@ -18,6 +18,7 @@ abstract class BasePipeline implements Serializable {
     def uploadFolderName
     def ifNotify = true
     def ifRelease = false
+    def ifPR = false
 
     BasePipeline(script) {
         this.script = script
@@ -67,7 +68,9 @@ abstract class BasePipeline implements Serializable {
                   setBuildStatusInGit()
                   if (ifNotify) {
                     def notify = new Notify(script)
-                    notify.slackNotify("#jenkins_ci", "slack_jenkins_ci", branchName, versionName)
+                    def channelName = (branchName == "master") ? "#jenkins_ci_master" : "#jenkins_ci_branch"
+                    def tokenName = (branchName == "master") ? "slack_jenkins_ci_master" : "slack_jenkins_ci"
+                    notify.slackNotify(channelName, tokenName, branchName, versionName)
                   }
                 }
                 // script.stage ('Final') {
@@ -92,7 +95,6 @@ abstract class BasePipeline implements Serializable {
         script.stage('Deploy', this.&deploy)
 
     }
-
 
     void setup() {
         logger.info "### Setup"
@@ -166,7 +168,11 @@ abstract class BasePipeline implements Serializable {
           versionName = "R.${fixedBranchName}.${script.env.RELEASE_BUILD_NUMBER}"
         } else {
           def fixedBranchName = branchName.replaceAll('/',"_")
-          versionName = "${versionBase}.${fixedBranchName}.${script.env.BUILD_NUMBER}"
+          if (ifPR) {
+            versionName = "${versionBase}.${fixedBranchName}.PR${script.env.CHANGE_ID}.${script.env.BUILD_NUMBER}"
+          } else {
+            versionName = "${versionBase}.${fixedBranchName}.${script.env.BUILD_NUMBER}"
+          }
         }
       }
       logger.info "## Version is ${versionName}"

@@ -56,17 +56,17 @@ class AndroidPipeline extends BasePipeline {
     @Override
     void integrationTests(){
       logger.info "### Run Integration Tests"
-      def resultsName = "${script.env.JOB_NAME}_${script.env.BUILD_NUMBER}".toLowerCase()
+      def resultsName = "${script.env.JOB_NAME}".replaceAll("/","_").toLowerCase() + "_${script.env.BUILD_NUMBER}".toLowerCase()
+      // Runs with choosen device Nexus5, api version 23, locale en, orientation portrait
+      // If needed can be run with multiple variations of devices/version/locale/orientation, bit at the moment resluts are copied
+      // only for one, since the folder created by Firebase is built from this parameters
+
+      def device_model = "Nexus5"
+      def api_version="23"
+      def locale="en"
+      def orientation="portrait"
 
       try {
-        // Runs with choosen device Nexus5, api version 23, locale en, orientation portrait
-        // If needed can be run with multiple variations of devices/version/locale/orientation, bit at the moment resluts are copied
-        // only for one, since the folder created by Firebase is built from this parameters
-        def device_model = "Nexus5"
-        def api_version="23"
-        def locale="en"
-        def orientation="portrait"
-
         script.sh "gcloud firebase test android run --app " + getFullApkPath(appForTestAPK) + " --test " + getFullApkPath(appAndroidTestsAPK) +
                   " --device model=${device_model},version=${api_version},locale=${locale},orientation=${orientation} --directories-to-pull /sdcard/Download/report --results-history-name ${resultsName} --results-bucket ${resultsName} --results-dir=${resultsName}"
       } catch (e) {

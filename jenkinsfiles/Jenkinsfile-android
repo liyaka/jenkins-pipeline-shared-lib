@@ -18,16 +18,34 @@ This job parameters:
 node ("master") {
 
     def pipeline = new AndroidPipeline(this)
-    pipeline.projectName = "myorg/myandroidproject"
+    pipeline.orgName = "myorg"
+    pipeline.projectName = "myandroidproject"
+
     if ( "${env.BRANCH_NAME}" == "" || "${env.BRANCH_NAME}" == "null" || "${env.BRANCH_NAME}" == "master" || "${env.BRANCH_NAME}" == "origin/master"){
       pipeline.setBranchProperties("master")
+    } else if("${env.BRANCH_NAME}".startsWith("PR")) {
+      env.BRANCH_NAME = "${env.CHANGE_BRANCH}"
+      env.BUILD_TARGET_TYPE = "Release"
+      //env.RUN_INTEGRATION_TESTS = "true"
+      pipeline.ifPR = true
+      pipeline.setBranchProperties("branch")
+
     } else {
       pipeline.setBranchProperties("branch")
     }
 
     pipeline.buildTarget = "assemble${env.BUILD_TARGET_TYPE}"
-    pipeline.artifactsList = "**/*--Android1.apk, *_version"
-    pipeline.ifUploadToGDrive = false
+    pipeline.artifactsList = "**/*--myapp.apk, *_version"
+
+    //pipeline.ifUploadToGDrive = false
+    // pipeline.artifactsForUpload = [ "app/build/outputs/apk/*/*v8a--app.apk", "app-remote-screen/build/outputs/apk/*/*--app2.apk" ]
+
+    if ( "${env.RUN_INTEGRATION_TESTS}" == "true"){
+      pipeline.runIntegrationTests = true
+      pipeline.appForTestAPK = "**/*x86--myapp.apk"
+      pipeline.appPackageName = "com.xxx.ai.kyou"
+      pipeline.buildTarget = pipeline.buildTarget + " app:assembleReleaseAndroidTest"
+    }
     println "Branch is " + pipeline.branchName
 
     pipeline.run()
