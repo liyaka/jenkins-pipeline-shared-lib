@@ -1,89 +1,94 @@
 package lulu.jenkins.ci
 
-import lulu.jenkins.ci.Constants
 import lulu.jenkins.utils.*
 
 abstract class BasePipeline implements Serializable {
 
     def script
-    def logger
-    def orgName
-    def projectName
-    def branchName
-    def firstUnstableStage
-    def pauseAfterEachStage
-    def versionName
-    def artifactsList
-    def artifactsListExcludes = ""
-    def uploadFolderName
-    def ifNotify = true
-    def ifRelease = false
-    def ifPR = false
+    String orgName = Constants.ORG_NAME
+    String projectName
+    String mainBranchName = "master"
+    String branchName
+    String targetBranchName = ""
+    String versionBase
+    String versionName
+    String artifactsList = ""
+    String artifactsListExcludes = ""
+    boolean ifNotify = true
+    boolean ifPR = false
+    boolean isGitRepo = true
+    String slackChannel = ""
+    String additionalSlackMessage = ""
+    String additionalSuccessSlackMessage = ""
+    String stageName = ""
+    boolean ifArchiveTestResults = true
+    String pathToUnitTestResults = "**/build/test-results/test/*.xml"
 
     BasePipeline(script) {
         this.script = script
-
-        logger = new Logger(script)
     }
 
-    void setBranchProperties(String branchType){
+    void setBranchProperties() {
+        script.echo "### Set Branch Properties"
 
-      if (branchType == "master") {
-        branchName = "master"
-        uploadFolderName = Constants.GOOGLE_DRIVE_NIGHTLY_FOLDER
-      } else {
-        branchName = "${script.env.BRANCH_NAME}".replaceAll("origin/","")
-        if (branchName.startsWith("release") && "${script.env.RELEASE_BUILD_NUMBER}" != "" && "${script.env.RELEASE_BUILD_NUMBER}" != "null"){
-          uploadFolderName = Constants.GOOGLE_DRIVE_RELEASE_FOLDER
-          ifRelease = true
+        if ( "${script.env.BRANCH_NAME}" == "" || "${script.env.BRANCH_NAME}" == "null" || "${script.env.BRANCH_NAME}" == mainBranchName || "${script.env.BRANCH_NAME}" == "origin/${mainBranchName}"){
+            branchName = mainBranchName
+            targetBranchName = mainBranchName
         } else {
-          uploadFolderName = Constants.GOOGLE_DRIVE_FB_FOLDER
+            if (branchName.startsWith("PR")) {
+              branchName = "${script.env.CHANGE_BRANCH}".replaceAll("origin/", "")
+              targetBranchName = "${script.env.CHANGE_TARGET}".replaceAll("origin/", "")
+              ifPR = true
+            } else {
+              branchName = "${script.env.BRANCH_NAME}".replaceAll("origin/", "")
+              targetBranchName = mainBranchName
+            }
         }
-      }
-
+        script.echo "Branch is ${branchName}, targetBranchName is ${targetBranchName}"
     }
 
     void run() {
         script.timestamps() {
+          script.ansiColor('xterm'){
             try {
-                logger.info "## Running with params: ${this.properties}"
+                script.echo "## Running with params: ${this.properties}"
                 runImpl()
-                if (ifRelease){
-                  script.stage ("TagBuild"){
-                    logger.info "### TagBuild"
-                    gitTagforBuild()
+                if (script.currentBuild.currentResult == "SUCCESS" && !ifPR) {
+                  script.stage("TagBuild") {
+                      script.echo "### TagBuild"
+                      stageName = script.env.STAGE_NAME
+                      GitUtils.tagBuild(script, projectName, versionName)
                   }
                 }
-            } catch (e) {
-                script.currentBuild.result = "FAILED"
+                if (script.currentBuild.currentResult == "SUCCESS"){
+                  postBuild()
+                }
+
+            } catch (Exception e) {
+                script.currentBuild.result = "FAILURE"
                 throw e
             } finally {
-                script.stage ("Archive"){
-                  logger.info "### Archive"
-                  // archiveTestResults()
-                  archiveFiles()
+                script.stage("Archive") {
+                    script.echo "### Archive"
+                    archiveTestResults()
+                    archiveFiles()
                 }
-                script.stage ("Notify"){
-                  logger.info "### Notify"
-                  setBuildStatusInGit()
-                  if (ifNotify) {
-                    def notify = new Notify(script)
-                    def channelName = (branchName == "master") ? "#jenkins_ci_master" : "#jenkins_ci_branch"
-                    def tokenName = (branchName == "master") ? "slack_jenkins_ci_master" : "slack_jenkins_ci"
-                    notify.slackNotify(channelName, tokenName, branchName, versionName)
-                  }
+
+                script.stage("Notify") {
+                    script.echo "### Notify"
+                    setBuildStatusInGit()
+                    slackNotify(false)
                 }
-                // script.stage ('Final') {
-                //   logger.info "### Final"
-                  //cleanupResources()
-                }
-                if (firstUnstableStage) {
-                  logger.info "## Build became UNSTABLE in stage $firstUnstableStage"
+                script.stage ('Final') {
+                  script.echo "### Final"
+                  cleanupResources()
                 }
             }
+          }
         }
+    }
 
-
+    // Example of runImpl function that needs to be iomplemented
     void runImpl() {
         script.stage('Setup', this.&setup)
         script.stage('Checkout', this.&checkout)
@@ -97,143 +102,82 @@ abstract class BasePipeline implements Serializable {
     }
 
     void setup() {
-        logger.info "### Setup"
+        script.echo "### Setup"
+        stageName = script.env.STAGE_NAME
         initParams()
-        cleanWorkspace()
+        Utils.cleanWorkspace(script)
+        slackChannel = ( slackChannel == "") ? "jenkins_" + projectName.replaceAll("-","_") : slackChannel
 
     }
 
     void checkout() {
-
-       logger.info "### Checkout"
-
-       script.checkout changelog: true,
-                scm: [
-                $class           : 'GitSCM',
-                branches         : [[name: branchName]],
-                extensions       : [[$class: 'LocalBranch', localBranch: "**"],
-                                   [$class: 'SubmoduleOption',
-                                    disableSubmodules: true,
-                                    parentCredentials: true,
-                                    recursiveSubmodules: true,
-                                    reference: '',
-                                    trackingSubmodules: false]],
-                browser          : [$class: 'GithubWeb', repoUrl: Constants.GITHUB_BROWSE_URL + orgName + "/" + projectName ],
-                userRemoteConfigs: [[url: Constants.GITHUB_URL + orgName + "/" + projectName + '.git' ]]
-
-        ]
-
-        script.sh "git submodule update --recursive --init"
-
+        script.echo "### Checkout"
+        stageName = script.env.STAGE_NAME
+        script.echo "# Checkout ${orgName}, ${projectName}, ${branchName}"
+        GitUtils.checkout(script, orgName, projectName, branchName)
     }
 
-    void initParams() {
-    }
-
-    void retrieveCurrentBuildUser() {
-        script.wrap([$class: 'BuildUser']) {
-            script.sh returnStdout: true, script: 'echo ${BUILD_USER}'
-        }
-    }
-
-    void getGitUserFromBranchName() {
-      if (branchName  != "") {
-          script.sh returnStdout: true, script: 'dirname ${branchName } | xargs basename'
-      } else {
-          script.sh returnStdout: true, script: 'echo ""'
-      }
-    }
-
-    void retrieveBranchName(){
-      script.sh returnStdout: true, script: 'git branch'
-    }
+    void initParams() {}
 
     void buildInfo() {
-        logger.info "### BuildInfo"
+        script.echo "### BuildInfo"
+        stageName = script.env.STAGE_NAME
         setVersion()
         populateBuildDisplayName()
         populateBuildDescription()
-        createVersionFile()
     }
 
-    void setVersion(){
+    void setVersion() {
 
-      def versionBase = script.sh (returnStdout: true, script:'#!/bin/bash \n while read var value; do export ${var}=${value//\\"/}; done < version-app; echo $versionName').trim()
-      logger.info "## versionBase is ${versionBase}, branchName is ${branchName}, ifRelease is ${ifRelease}"
-      if (branchName == "master") {
-        versionName = "${versionBase}.${script.env.BUILD_NUMBER}"
-      } else {
-        if (ifRelease) {
-          def fixedBranchName = branchName.replaceAll('release/',"").replaceAll('/',"_")
-          versionName = "R.${fixedBranchName}.${script.env.RELEASE_BUILD_NUMBER}"
+        versionBase = Utils.getVersionBaseFromVersionFile(script)
+
+        script.echo "## versionBase is ${versionBase}, branchName is ${branchName}"
+        if (branchName == mainBranchName) {
+            versionName = "${versionBase}-${script.env.BUILD_NUMBER}"
         } else {
-          def fixedBranchName = branchName.replaceAll('/',"_")
+          // Fixing branch name to fit helm chart version name format
+          String fixedBranchName = branchName.replaceAll('/', "-").replaceAll("_","-").toLowerCase()
+          if (fixedBranchName.size() > 50){
+            fixedBranchName = fixedBranchName[0..50]
+          }
           if (ifPR) {
-            versionName = "${versionBase}.${fixedBranchName}.PR${script.env.CHANGE_ID}.${script.env.BUILD_NUMBER}"
+              versionName = "${versionBase}-${fixedBranchName}.pr${script.env.CHANGE_ID}-${script.env.BUILD_NUMBER}"
           } else {
-            versionName = "${versionBase}.${fixedBranchName}.${script.env.BUILD_NUMBER}"
+              versionName = "${versionBase}-${fixedBranchName}-${script.env.BUILD_NUMBER}"
           }
         }
-      }
-      logger.info "## Version is ${versionName}"
-
+        script.echo "## Version: ${versionName}"
     }
 
-    void populateBuildDisplayName() {
-        script.currentBuild.displayName = versionName
-    }
-
-    void populateBuildDescription() {
-        if (branchName.startsWith("release") || branchName == "master"){
-          script.currentBuild.description = ""
+    void populateBuildDisplayName(String displayName = "") {
+        if (displayName == ""){
+          script.currentBuild.displayName = versionName
         } else {
-          script.currentBuild.description = "Branch: <b>${branchName}</b>"
+          script.currentBuild.displayName = displayName
         }
     }
 
-    void createVersionFile(){
-      def projectNameUpper = projectName.toUpperCase()
-      def version_map = [ (projectNameUpper + "_VERSION"): "${versionName}",
-                          (projectNameUpper + "_GIT_COMMIT"): "${getCommitSha()}"]
-      script.writeYaml file: projectName + "_version", data: version_map
+    void populateBuildDescription(String buildDescription = "") {
+      if (buildDescription == ""){
+        if (branchName == mainBranchName) {
+            script.currentBuild.description = ""
+        } else {
+            script.currentBuild.description = "Branch: <b>${branchName}</b>"
+        }
+      } else {
+        script.currentBuild.description = buildDescription
+      }
     }
 
     void setBuildStatusInGit() {
-      // Workaround - there is no UNSTABLE status that can be sent to GitHub, change it to ERROR
-      def buildSts = script.currentBuild.currentResult
-      if (buildSts == "UNSTABLE"){
-        buildSts = "ERROR"
-      }
-      // need to have jenkins_github_login_user_token defined in your credetials (create the token for user on GitHub in advance)
-      logger.info("repo: ${projectName}, account: \"myorg\", context: 'build_sts', credentialsId: \"jenkins_github_login_user_token\", sha: \"${getCommitSha()}\", description: 'Build Status', status: ${buildSts}")
-      script.githubNotify account: 'myorg', context: 'build_sts', credentialsId: 'jenkins_github_login_user_token', description: 'Build Status', repo: projectName, sha: getCommitSha(), status: buildSts
-
+        if (isGitRepo){
+          GitUtils.setBuildStsinGitHub(script, projectName)
+        }
     }
 
-    void setGitBranch( String inputGitBranch = ""){
-      if (inputGitBranch != "") {
-        branchName  = inputGitBranch
-      } else {
-        branchName  = "${retrieveBranchName()}"
-      }
+    void build() {}
 
-    }
-
-    String getCommitSha(){
-      return script.sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
-    }
-
-    void deploy(){
-        logger.info  "Implements deploy logic here (push to docker , maven, gradle deploy)"
-    }
-
-    void build() {
-
-    }
-
-    void unitTests(String unitTestArgs) {
-        // Implement in CIs where UTs are not being run during compile (i.e. non maven builds)
-    }
+    void deploy() {}
 
     void systemTests() {}
 
@@ -241,63 +185,42 @@ abstract class BasePipeline implements Serializable {
 
     void integrationTests() {}
 
+    void postBuild(){}
 
-    void runTests() {
-        runSystemTests()
-        archiveTestScreenshots()
-        archiveTestResults()
-        // Archiving test results can change script.currentBuilt.result
-
-    }
-
-    void runSystemTests() {
-
-    }
-
-    void archiveTestScreenshots() {
-    }
-
-    void uploadArtifact(){
-        logger.info "## Implements uploading artifacts to various repositories (push to docker , maven, gradle deploy)"
-    }
-
-    void archiveLogs() {
-    }
-
-    void cleanupResources() {
-      logger.info "## Change permissions to be able to delete the workspace"
-      script.sh 'sudo chown -R jenkins:jenkins *'
-    }
-
-    void cleanWorkspace() {
-      logger.info "## Cleaning workspace"
-      script.deleteDir()
-    }
+    void cleanupResources() {}
 
     void archiveTestResults() {
-      script.step([$class: 'JUnitResultArchiver', testResults: 'output/test_reports/*/*.xml', allowEmptyResults: true])
+      if (ifArchiveTestResults){
+        script.echo "## Archive Unit tests report"
+        String[] junitReports = script.findFiles(glob: pathToUnitTestResults)
+        if (junitReports.length > 0){
+          script.junit pathToUnitTestResults
+        }
+        // Since tests results are already archived, no need to archive them again
+        ifArchiveTestResults = false
+      }
     }
 
-    void archiveFiles(){
-      script.archiveArtifacts artifacts: artifactsList, excludes: artifactsListExcludes
+    void archiveFiles() {
+        if (artifactsList != ""){
+          script.archiveArtifacts artifacts: artifactsList, excludes: artifactsListExcludes
+        }
     }
 
-    String getCurrentBuildResult() {
-        return script.currentBuild.result
+    void uploadToGS(String uploadFolderName){
+      script.echo "### Upload to GS"
+      stageName = script.env.STAGE_NAME
+      Utils.uploadToGS( script, projectName, uploadFolderName, versionName, artifactsForUpload)
+
     }
 
-    void gitTagforBuild(){
-      script.sh("git tag -f ${versionName}")
-      script.sh("git push origin ${versionName}")
+    void slackNotify(boolean startMessage=false){
+      if (ifNotify) {
+          def notify = new Notify(script)
+          String tokenName = "slack_jenkins_ci"
+          additionalSlackMessage = (script.currentBuild.currentResult == "SUCCESS" && !startMessage) ? additionalSlackMessage + "\n" + additionalSuccessSlackMessage : additionalSlackMessage
+          notify.slackNotify(slackChannel, tokenName, branchName, versionName, versionCode, isGitRepo, additionalSlackMessage, startMessage, stageName)
+      }
     }
 
-
-    // @NonCPS
-    // def mapToList(depmap) {
-    //     def dlist = []
-    //     for (def entry2 in depmap) {
-    //         dlist.add(new java.util.AbstractMap.SimpleImmutableEntry(entry2.key, entry2.value))
-    //     }
-    //     dlist
-    // }
 }

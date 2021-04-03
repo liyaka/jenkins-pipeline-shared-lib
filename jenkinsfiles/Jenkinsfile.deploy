@@ -1,0 +1,11 @@
+@Library('jenkins-pipeline-libs')
+import lulu.jenkins.deployment.*
+
+node ("ci") {
+
+    def pipeline = new DeployK8sServicePipeline(this)
+    pipeline.chartRepo = "dummy-app-service"
+    pipeline.chartName = "dummy-app"
+    pipeline.run()
+
+}
